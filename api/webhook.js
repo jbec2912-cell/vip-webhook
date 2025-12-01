@@ -1,53 +1,50 @@
+export const config = { api: { bodyParser: false } };
+
+import { buffer } from "micro";
+
 export default async function handler(req, res) {
-  // THIS LINE FIXES THE CALLS — Twilio does a GET request first to validate the webhook
+  // THIS LINE IS THE ONLY ONE THAT WAS MISSING
   if (req.method === "GET") {
-    return res.status(200).send("OK");
+    return res.status(200).send("VIP Webhook is live ✅");
   }
 
-  // Original check for POST (now only runs for real calls)
   if (req.method !== "POST") {
     return res.status(405).send("Method Not Allowed");
   }
 
-  console.log("Incoming Twilio webhook:", req.body);
+  const buf = await buffer(req);
+  const payload = Object.fromEntries(new URLSearchParams(buf.toString()));
+
+  console.log("Incoming call from Twilio:", payload.CallSid);
 
   try {
-    // Create a new ElevenLabs phone call session
-    const session = await fetch(
-      "https://api.elevenlabs.io/v1/convai/phone-calls/sessions",
-      {
-        method: "POST",
-        headers: {
-          "xi-api-key": process.env.ELEVENLABS_API_KEY,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          agent_id: process.env.ELEVENLABS_AGENT_ID,
-          call_target: {
-            platform: "twilio",
-            twilio_connection_info: {
-              twilio_account_sid: req.body.AccountSid,
-              twilio_call_sid: req.body.CallSid,
-            },
+    const session = await fetch("https://api.elevenlabs.io/v1/convai/phone-calls/sessions", {
+      method: "POST",
+      headers: {
+        "xi-api-key": process.env.ELEVENLABS_API_KEY,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        agent_id: process.env.ELEVENLABS_AGENT_ID,
+        call_target: {
+          platform: "twilio",
+          twilio_connection_info: {
+            twilio_account_sid: payload.AccountSid,
+            twilio_call_sid: payload.CallSid,
           },
-        }),
-      }
-    );
+        },
+      }),
+    });
 
     const data = await session.json();
-    console.log("ElevenLabs session response:", data);
+    console.log("ElevenLabs session:", data);
 
-    // Tell Twilio to wait while ElevenLabs connects
-    const twiml = `
-      <Response>
-        <Pause length="1" />
-      </Response>
-    `;
-
+    const twiml = `<Response><Pause length="30"/></Response>`;
     res.setHeader("Content-Type", "text/xml");
-    return res.status(200).send(twiml);
+    res.status(200).send(twiml);
   } catch (err) {
-    console.error("Error creating ElevenLabs session:", err);
-    return res.status(500).send("Error");
+    console.error("Error:", err);
+    res.setHeader("Content-Type", "text/xml");
+    res.status(500).send("<Response><Say>Sorry, something went wrong.</Say></Response>");
   }
 }
