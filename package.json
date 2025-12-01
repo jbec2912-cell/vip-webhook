@@ -4,7 +4,6 @@
   "description": "Twilio SMS inbound handler for Brandon VIP alerts",
   "type": "module",
   "scripts": {
-    "build": "tsc"
   },
   "dependencies": {
     "@vercel/node": "^3.0.0",
