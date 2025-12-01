@@ -1,4 +1,10 @@
 export default async function handler(req, res) {
+  // THIS LINE FIXES THE CALLS — Twilio does a GET request first to validate the webhook
+  if (req.method === "GET") {
+    return res.status(200).send("OK");
+  }
+
+  // Original check for POST (now only runs for real calls)
   if (req.method !== "POST") {
     return res.status(405).send("Method Not Allowed");
   }
