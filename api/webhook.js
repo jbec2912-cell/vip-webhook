@@ -1,11 +1,12 @@
+// api/webhook.js
 export const config = { api: { bodyParser: false } };
 
 import { buffer } from "micro";
 
 export default async function handler(req, res) {
-  // THIS LINE IS THE ONLY ONE THAT WAS MISSING
+  // Twilio GET validation → return 200
   if (req.method === "GET") {
-    return res.status(200).send("VIP Webhook is live ✅");
+    return res.status(200).send("VIP Webhook is live");
   }
 
   if (req.method !== "POST") {
@@ -15,10 +16,8 @@ export default async function handler(req, res) {
   const buf = await buffer(req);
   const payload = Object.fromEntries(new URLSearchParams(buf.toString()));
 
-  console.log("Incoming call from Twilio:", payload.CallSid);
-
   try {
-    const session = await fetch("https://api.elevenlabs.io/v1/convai/phone-calls/sessions", {
+    await fetch("https://api.elevenlabs.io/v1/convai/phone-calls/sessions", {
       method: "POST",
       headers: {
         "xi-api-key": process.env.ELEVENLABS_API_KEY,
@@ -36,15 +35,12 @@ export default async function handler(req, res) {
       }),
     });
 
-    const data = await session.json();
-    console.log("ElevenLabs session:", data);
-
     const twiml = `<Response><Pause length="30"/></Response>`;
     res.setHeader("Content-Type", "text/xml");
     res.status(200).send(twiml);
   } catch (err) {
-    console.error("Error:", err);
+    console.error(err);
     res.setHeader("Content-Type", "text/xml");
-    res.status(500).send("<Response><Say>Sorry, something went wrong.</Say></Response>");
+    res.status(500).send("<Response><Say>Sorry, something broke.</Say></Response>");
   }
 }
