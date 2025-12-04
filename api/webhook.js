@@ -18,7 +18,7 @@ export default async function handler(req, res) {
   }
 
   // Change +18637977937 to whatever number you want the call forwarded to
-  const forwardToNumber = '+18637977937';   // ←←← EDIT THIS LINE
+  const forwardToNumber = '+18632678150';   // ←←← EDIT THIS LINE
 
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
