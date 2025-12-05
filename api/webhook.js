@@ -1,85 +1,104 @@
-// api/webhook.js  ←  FINAL WORKING VERSION (Dec 2025)
+// /api/webhook.js – Bulletproof Vapi + Vercel (Dec 2025)
 import { NextResponse } from "next/server";
 
 export async function POST(req) {
+  let body;
   try {
-    const body = await req.json();
-
-    // Safely extract fields (Vapi sometimes sends them in different places)
-    const to = body.to || body.call?.to;
-    const from = body.from || body.call?.from;
-    const customerName = body.customerName || "there";
-    const vehicle = body.vehicle || "vehicle";
-
-    // INBOUND CALL (someone calling your agent number)
-    if (to && !to.startsWith("client-")) {
-      return NextResponse.json({
-        messages: [
-          {
-            role: "assistant",
-            content: `Hey, this is Brandon at Lakeland Toyota! Thanks for calling me back — I left you a message about your ${vehicle} coming in for service. Who am I speaking with so I can pull up the right info?`,
-          },
-        ],
-      });
+    // Safe parse: Try JSON first, fallback to form data (Vapi/Twilio sometimes sends x-www-form-urlencoded)
+    const contentType = req.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      body = await req.json();
+    } else {
+      // Parse form data if not JSON
+      const formData = await req.formData();
+      body = Object.fromEntries(formData.entries());
     }
+    console.log('Vapi Body Received:', JSON.stringify(body)); // Log for debugging
+  } catch (parseError) {
+    console.error('Parse Error:', parseError);
+    body = {}; // Fallback empty body
+  }
 
-    // OUTBOUND CALL (your agent calling the customer)
+  // Safe field extraction (Vapi inbound often nests in 'call' or sends Twilio params)
+  const to = (body.to || body.call?.to || body.Called || '').toString();
+  const from = (body.from || body.call?.from || body.Caller || '').toString();
+  const direction = body.direction || (to && !to.startsWith('client-') ? 'inbound' : 'outbound');
+  const customerName = body.customerName || body.name || 'there';
+  const vehicle = body.vehicle || 'vehicle';
+
+  // INBOUND: Someone calling your number – answer immediately
+  if (direction === 'inbound' || (!from.startsWith('client-') && to)) {
+    console.log('Inbound detected – Brandon answering');
     return NextResponse.json({
+      success: true,
       messages: [
         {
-          role: "assistant",
-          content: "",
-          type: "silence",
-          durationMs: 2600,
+          role: 'assistant',
+          content: `Hey, this is Brandon at Lakeland Toyota! Thanks for calling back – I left a message about your ${vehicle} service visit. Is this ${customerName}, or who am I speaking with?`,
         },
       ],
-      next: {
-        type: "function",
-        name: "detect_voicemail_or_human",
+    }, { status: 200 });
+  }
+
+  // OUTBOUND: Agent calling customer – silence + voicemail detect
+  console.log('Outbound detected – starting silence');
+  return NextResponse.json({
+    success: true,
+    messages: [
+      {
+        role: 'assistant',
+        content: '',
+        type: 'silence',
+        durationMs: 2600,
       },
-      functions: [
-        {
-          name: "detect_voicemail_or_human",
-          implementation: async ({ transcript = "" }) => {
-            const t = transcript.toLowerCase().trim();
+    ],
+    next: {
+      type: 'function',
+      name: 'detect_voicemail_or_human',
+    },
+    functions: [
+      {
+        name: 'detect_voicemail_or_human',
+        implementation: async ({ transcript = '' }) => {
+          const t = transcript.toLowerCase().trim();
+          console.log('Transcript for detection:', t); // Log for debug
 
-            const isVoicemail =
-              t === "" ||
-              t.length > 70 ||
-              /leave.*message|not available|voicemail|at the tone|record your/i.test(t);
+          const isVoicemail =
+            t === '' ||
+            t.length > 70 ||
+            /leave.*message|not available|voicemail|at the (tone|beep)|record your/i.test(t) ||
+            /please leave|unavailable|mailbox/i.test(t); // Extra patterns
 
-            if (isVoicemail) {
-              return {
-                messages: [
-                  {
-                    role: "assistant",
-                    content: `Hey ${customerName}, it’s Brandon, the VIP Director at Lakeland Toyota. I saw you’re coming in for service on your ${vehicle} and wanted to reach out. When you get checked in, swing by desk 17 — I’ll show you real quick what your trade is worth today. Takes two minutes, no pressure at all. See you soon!`,
-                  },
-                ],
-                endCall: true,
-              };
-            }
-
-            // Human answered → normal Brandon script
+          if (isVoicemail) {
+            console.log('Voicemail detected – leaving message + hangup');
             return {
               messages: [
-                { role: "assistant", content: `Hi ${customerName}?` },
-                { role: "assistant", content: `Hey ${customerName}, this is Brandon at Lakeland Toyota.` },
-                { role: "assistant", content: `I see you’re bringing your ${vehicle} in for service… How’s it been treating you lately?` },
+                {
+                  role: 'assistant',
+                  content: `Hey ${customerName}, it's Brandon, the VIP Director at Lakeland Toyota. I saw you're coming in for service on your ${vehicle} and wanted to reach out personally. When you get checked in, come find me at desk 17 – I'll show you real quick what your trade is worth right now and what options look like. Takes two minutes, zero pressure. Looking forward to meeting you! Talk soon.`,
+                },
               ],
+              endCall: true,
             };
-          },
+          }
+
+          // Human – run Brandon's script
+          console.log('Human detected – starting rapport');
+          return {
+            messages: [
+              { role: 'assistant', content: `Hi ${customerName}?` },
+              { role: 'assistant', content: `Hey ${customerName}, this is Brandon at Lakeland Toyota.` },
+              { role: 'assistant', content: `I see that you're bringing your ${vehicle} in for service… How's it been treating you lately?` },
+            ],
+          };
         },
-      ],
-    });
-  } catch (error) {
-    console.error("Webhook error:", error);
-    return NextResponse.json(
-      { messages: [{ role: "assistant", content: "Hey, this is Brandon at Lakeland Toyota!" }] },
-      { status: 200 }
-    );
-  }
+      },
+    ],
+  }, { status: 200 });
 }
 
+// Graceful config for Vercel
 export const config = {
-  api: { bodyParser: true };
+  api: { bodyParser: false }, // Disable built-in parser – we handle it manually
+  runtime: 'edge', // Optional: Faster on Vercel
+};
