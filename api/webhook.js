@@ -1,104 +1,115 @@
-// /api/webhook.js – Bulletproof Vapi + Vercel (Dec 2025)
+// /api/webhook.js – Twilio ONLY – works on Vercel (Dec 2025)
 import { NextResponse } from "next/server";
 
-export async function POST(req) {
-  let body;
-  try {
-    // Safe parse: Try JSON first, fallback to form data (Vapi/Twilio sometimes sends x-www-form-urlencoded)
-    const contentType = req.headers.get('content-type') || '';
-    if (contentType.includes('application/json')) {
-      body = await req.json();
-    } else {
-      // Parse form data if not JSON
-      const formData = await req.formData();
-      body = Object.fromEntries(formData.entries());
-    }
-    console.log('Vapi Body Received:', JSON.stringify(body)); // Log for debugging
-  } catch (parseError) {
-    console.error('Parse Error:', parseError);
-    body = {}; // Fallback empty body
+export async function POST(request) {
+  // Twilio always sends form-urlencoded → parse it safely
+  const formData = await request.formData();
+  const params = Object.fromEntries(formData);
+
+  const CallSid = params.CallSid || "";
+  const To = params.To || "";
+  const From = params.From || "";
+  const SpeechResult = params.SpeechResult || "";
+
+  // Pass these in when you create the outbound call via Twilio REST API
+  const customerName = params.customerName || "there";
+  const vehicle = params.vehicle || "vehicle";
+
+  // ─────────────────────────────────────────────
+  // 1. INBOUND CALL – someone calling your Twilio number
+  // ─────────────────────────────────────────────
+  if (!CallSid || CallSid.length < 10) {
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="man" language="en-US">
+    Hey, this is Brandon at Lakeland Toyota! Thanks for calling me back.
+    I left you a message about your ${vehicle} coming in for service.
+    Who am I speaking with real quick?
+  </Say>
+  <Pause length="20"/>
+</Response>`;
+    return new NextResponse(twiml, {
+      status: 200,
+      headers: { "Content-Type": "text/xml" },
+    });
   }
 
-  // Safe field extraction (Vapi inbound often nests in 'call' or sends Twilio params)
-  const to = (body.to || body.call?.to || body.Called || '').toString();
-  const from = (body.from || body.call?.from || body.Caller || '').toString();
-  const direction = body.direction || (to && !to.startsWith('client-') ? 'inbound' : 'outbound');
-  const customerName = body.customerName || body.name || 'there';
-  const vehicle = body.vehicle || 'vehicle';
-
-  // INBOUND: Someone calling your number – answer immediately
-  if (direction === 'inbound' || (!from.startsWith('client-') && to)) {
-    console.log('Inbound detected – Brandon answering');
-    return NextResponse.json({
-      success: true,
-      messages: [
-        {
-          role: 'assistant',
-          content: `Hey, this is Brandon at Lakeland Toyota! Thanks for calling back – I left a message about your ${vehicle} service visit. Is this ${customerName}, or who am I speaking with?`,
-        },
-      ],
-    }, { status: 200 });
+  // ─────────────────────────────────────────────
+  // 2. OUTBOUND CALL – first hit (no SpeechResult yet)
+  // ─────────────────────────────────────────────
+  if (!SpeechResult) {
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Pause length="3"/>
+  <Gather input="speech" action="${request.url}" method="POST" speechTimeout="auto" timeout="6">
+    <Say voice="man" language="en-US">Hi ${customerName}?</Say>
+  </Gather>
+  <Redirect>${request.url}</Redirect>
+</Response>`;
+    return new NextResponse(twiml, {
+      status: 200,
+      headers: { "Content-Type": "text/xml" },
+    });
   }
 
-  // OUTBOUND: Agent calling customer – silence + voicemail detect
-  console.log('Outbound detected – starting silence');
-  return NextResponse.json({
-    success: true,
-    messages: [
-      {
-        role: 'assistant',
-        content: '',
-        type: 'silence',
-        durationMs: 2600,
-      },
-    ],
-    next: {
-      type: 'function',
-      name: 'detect_voicemail_or_human',
-    },
-    functions: [
-      {
-        name: 'detect_voicemail_or_human',
-        implementation: async ({ transcript = '' }) => {
-          const t = transcript.toLowerCase().trim();
-          console.log('Transcript for detection:', t); // Log for debug
+  // ─────────────────────────────────────────────
+  // 3. Speech detected – decide human vs voicemail
+  // ─────────────────────────────────────────────
+  const said = SpeechResult.toLowerCase().trim();
 
-          const isVoicemail =
-            t === '' ||
-            t.length > 70 ||
-            /leave.*message|not available|voicemail|at the (tone|beep)|record your/i.test(t) ||
-            /please leave|unavailable|mailbox/i.test(t); // Extra patterns
+  const isVoicemail =
+    said === "" ||
+    said.length > 70 ||
+    /leave.*message|not available|voicemail|mailbox|at the (tone|beep)|record your/i.test(said);
 
-          if (isVoicemail) {
-            console.log('Voicemail detected – leaving message + hangup');
-            return {
-              messages: [
-                {
-                  role: 'assistant',
-                  content: `Hey ${customerName}, it's Brandon, the VIP Director at Lakeland Toyota. I saw you're coming in for service on your ${vehicle} and wanted to reach out personally. When you get checked in, come find me at desk 17 – I'll show you real quick what your trade is worth right now and what options look like. Takes two minutes, zero pressure. Looking forward to meeting you! Talk soon.`,
-                },
-              ],
-              endCall: true,
-            };
-          }
+  if (isVoicemail) {
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="man" language="en-US">
+    Hey ${customerName}, it’s Brandon, the VIP Director at Lakeland Toyota.
+    I saw you’re coming in for service on your ${vehicle}.
+    When you get checked in, come find me at desk 17 — I’ll show you real quick what your trade is worth right now.
+    Takes two minutes, zero pressure. Looking forward to meeting you!
+  Talk soon!
+  </Say>
+  <Hangup/>
+</Response>`;
+    return new NextResponse(twiml, {
+      status: 200,
+      headers: { "Content-Type": "text/xml" },
+    });
+  }
 
-          // Human – run Brandon's script
-          console.log('Human detected – starting rapport');
-          return {
-            messages: [
-              { role: 'assistant', content: `Hi ${customerName}?` },
-              { role: 'assistant', content: `Hey ${customerName}, this is Brandon at Lakeland Toyota.` },
-              { role: 'assistant', content: `I see that you're bringing your ${vehicle} in for service… How's it been treating you lately?` },
-            ],
-          };
-        },
-      },
-    ],
-  }, { status: 200 });
+  // ─────────────────────────────────────────────
+  // 4. HUMAN answered – run full Brandon script
+  // ─────────────────────────────────────────────
+  const twiml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="man" language="en-US">Hi ${customerName}?</Say>
+  <Pause length="1"/>
+  <Say voice="man" language="en-US">Hey ${customerName}, this is Brandon at Lakeland Toyota.</Say>
+  <Pause length="1"/>
+  <Say voice="man" language="en-US">
+    I see you’re bringing your ${vehicle} in for service… How’s it been treating you lately?
+  </Say>
+  <Pause length="30"/>
+</Response>`;
+
+  return new NextResponse(twiml, {
+    status: 200,
+    headers: { "Content-Type": "text/xml" },
+  });
 }
 
-// Graceful config for Vercel
+// Twilio sometimes pings with GET
+export async function GET() {
+  return new NextResponse(`<?xml version="1.0" encoding="UTF-8"?><Response/>`, {
+    headers: { "Content-Type": "text/xml" },
+  });
+}
+
 export const config = {
-  api: { bodyParser: false }, // Disable built-in parser – we handle it manually
-  runtime: 'edge', // Optional: Faster on Vercel
+  api: {
+    bodyParser: false, // crucial for Twilio form data
+  },
 };
