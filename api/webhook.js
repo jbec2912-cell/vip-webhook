@@ -19,15 +19,11 @@ export async function POST(request) {
   if (!CallSid) {
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="man" language="en-US">
-    Hey, this is Brandon at Lakeland Toyota! Thanks for calling me back.
-    I left you a message about your ${vehicle} coming in for service.
-    Who am I speaking with real quick?
-  </Say>
+  <Say voice="alice" language="en-US">Hey, this is Brandon at Lakeland Toyota! Thanks for calling back. I left you a message about your service visit—who am I speaking with?</Say>
+  <Gather input="speech" action="${webhookUrl}" method="POST" timeout="30" speechTimeout="auto">
+    <Say voice="alice">Tell me more about your vehicle.</Say>
+  </Gather>
 </Response>`;
-    return new Response(twiml, { headers: { "Content-Type": "text/xml" } });
-  }
-
   // ─────────────────────────────────────
   // OUTBOUND – first hit (no speech yet) → 3-second silence + gather
   // ─────────────────────────────────────
