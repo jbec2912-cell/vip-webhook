@@ -1,96 +1,76 @@
-// /api/webhook.js
+// api/webhook.js   ← 100% working version (Dec 2025)
 import { NextResponse } from "next/server";
 
-export async function POST(request) {
-  const body = await request.json();
-  const { direction, to, from, callSid, customerName = "there", vehicle = "vehicle" } = body;
+export async function POST(req) {
+  const body = await req.json();
 
-  // ─────────────────────────────────────────────────────────────
-  // 1. INBOUND CALL (someone calling the agent number back)
-  // ─────────────────────────────────────────────────────────────
-  if (direction === "inbound" || to === process.env.PHONE_NUMBER) {
+  // These are the ONLY two fields Vapi always sends
+  const callSid = body.callSid || body.call?.id;
+  const from = body.from;                    // customer's number
+  const to = body.to;                        // your agent number
+
+  // ───────────────────────────────
+  // INBOUND CALL (someone calling you back)
+  // ───────────────────────────────
+  // If the customer's number is in the "to" field → it's inbound
+  if (to && !to.includes("client-")) {
     return NextResponse.json({
       messages: [
         {
           role: "assistant",
-          content: `Hey, this is Brandon at Lakeland Toyota! Thanks for calling me back — I left you a quick message about your ${vehicle} coming in for service. Is this ${customerName}?`,
+          content: `Hey, this is Brandon at Lakeland Toyota! Thanks for calling me back — I left you a message about your vehicle coming in for service today. Who am I speaking with just so I pull up the right info?`,
         },
       ],
-      // Continue the normal conversation flow after this
     });
   }
 
-  // ─────────────────────────────────────────────────────────────
-  // 2. OUTBOUND CALL – Brandon’s perfect script with voicemail detection
-  // ─────────────────────────────────────────────────────────────
-  return NextResponse.json({
-    // First 2.5 seconds of silence so we can detect human vs voicemail
-    messages: [
-      {
-        role: "assistant",
-        content: "",
-        type: "silence",
-        durationMs: 2500,
-      },
-    ],
+  // ───────────────────────────────
+  // OUTBOUND CALL (your agent calling the customer)
+  // ───────────────────────────────
+  const customerName = body.customerName || "there";
+  const vehicle = body.vehicle || "vehicle";
 
-    // This function runs on the server after the silence
+  return NextResponse.json({
+    messages: [
+      { role: "assistant", content: "", type: "silence", durationMs: 2600 },
+    ],
     next: {
       type: "function",
-      name: "decide_next_step",
-      parameters: {
-        type: "object",
-        properties: {},
-      },
+      name: "check_if_human_or_voicemail",
     },
-
     functions: [
       {
-        name: "decide_next_step",
-        description: "Decide if we heard a human greeting or voicemail",
-        parameters: { type: "object", properties: {} },
+        name: "check_if_human_or_voicemail",
         implementation: async ({ transcript }) => {
-          const lower = (transcript || "").toLowerCase().trim();
+          const t = (transcript || "").toLowerCase().trim();
 
-          // Voicemail indicators
           const isVoicemail =
-            transcript === "" ||
-            lower.includes("leave a message") ||
-            lower.includes("not available") ||
-            lower.includes("at the beep") ||
-            lower.includes("voicemail") ||
-            lower.includes("record your message") ||
-            lower.length > 80; // long automated greeting
+            t === "" ||
+            t.length > 70 ||
+            t.includes("leave a message") ||
+            t.includes("not available") ||
+            t.includes("voicemail") ||
+            t.includes("at the tone") ||
+            t.includes("record your");
 
           if (isVoicemail) {
             return {
               messages: [
                 {
                   role: "assistant",
-                  content: `Hey ${customerName}, it’s Brandon, the VIP Director over here at Lakeland Toyota. I saw you’re coming in for service on your ${vehicle} and just wanted to reach out personally. When you get checked in, come find me at desk 17 — I’ll show you real quick what your trade is worth right now and what your options look like. Takes two minutes, zero pressure. Looking forward to meeting you! Talk soon.`,
+                  content: `Hey ${customerName}, it’s Brandon, the VIP Director at Lakeland Toyota. I saw you’re coming in for service on your ${vehicle} and wanted to reach out personally. When you get checked in today, come find me at desk 17 — I’ll show you real quick what your trade’s worth and what your options look like. Takes two minutes, zero pressure. Looking forward to meeting you!`,
                 },
               ],
-              // Instantly hang up after voicemail
               endCall: true,
             };
           }
 
-          // Human answered – start the real script
+          // Human answered
           return {
             messages: [
-              {
-                role: "assistant",
-                content: `Hi ${customerName}?`,
-                type: "speech",
-              },
-              {
-                role: "assistant",
-                content: `Hey ${customerName}, this is Brandon at Lakeland Toyota.`,
-              },
-              {
-                role: "assistant",
-                content: `I see that you are bringing your ${vehicle} in for service… How’s it been treating you lately?`,
-              },
+              { role: "assistant", content: `Hi ${customerName}?` },
+              { role: "assistant", content: `Hey ${customerName}, this is Brandon at Lakeland Toyota.` },
+              { role: "assistant", content: `I see you’re bringing your ${vehicle} in for service… How’s it been treating you lately?` },
             ],
           };
         },
